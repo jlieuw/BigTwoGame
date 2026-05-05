@@ -11,11 +11,20 @@ env:
   BACKEND_IMG:  bigtwo-backend
   FRONTEND_IMG: bigtwo-frontend
 
+# Pipeline (main branch): plan → apply-base → build → apply-apps
+#
+# apply-base uses -target to provision only the resource group, ACR, and
+# Container Apps environment.  This guarantees the ACR exists before build
+# tries to push images to it, and that the container apps are only created
+# after their images are already available in the registry.
+#
+# PRs run only the plan step so diffs are visible without touching Azure.
+
+jobs:
 # ──────────────────────────────────────────────────────────────────────────────
-# Job 1 — plan (parallel with build)
+# Job 1 — plan (always)
 # Shows infrastructure diff on every push and PR.
 # ──────────────────────────────────────────────────────────────────────────────
-jobs:
   plan:
     name: OpenTofu plan
     runs-on: ubuntu-latest
@@ -54,42 +63,97 @@ jobs:
           TF_VAR_azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           TF_VAR_azure_location:        ${{ secrets.AZURE_LOCATION }}
           TF_VAR_image_tag:             ${{ github.sha }}
-        run: tofu plan -input=false -out=tfplan
-
-      - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: azure-tfplan
-          path: infra/azure-tofu/tfplan
-          retention-days: 1
+        run: tofu plan -input=false
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Job 2 — build (parallel with plan)
-# Builds and pushes images to ACR using commit SHA + latest tags.
+# Job 2 — apply-base (main only, after plan)
+# Creates the resource group, ACR, and Container Apps environment.
+# Uses -target so container apps are NOT created yet (images don't exist yet).
 # ──────────────────────────────────────────────────────────────────────────────
-  build:
-    name: Build and push images
+  apply-base:
+    name: OpenTofu apply (base infra)
     runs-on: ubuntu-latest
+    needs: [plan]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Log in to Azure
-        uses: azure/login@v2
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
         with:
-          creds: |
-            {
-              "clientId":       "${{ secrets.AZURE_CLIENT_ID }}",
-              "clientSecret":   "${{ secrets.AZURE_CLIENT_SECRET }}",
-              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
-              "tenantId":       "${{ secrets.AZURE_TENANT_ID }}"
-            }
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: Tofu init
+        working-directory: infra/azure-tofu
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET:   ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          tofu init -input=false \
+            -backend-config="storage_account_name=${{ secrets.AZURE_STATE_STORAGE_ACCOUNT }}"
+
+      - name: Tofu apply base infra
+        working-directory: infra/azure-tofu
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET:   ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          TF_VAR_azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_azure_location:        ${{ secrets.AZURE_LOCATION }}
+          TF_VAR_image_tag:             ${{ github.sha }}
+        run: |
+          tofu apply -auto-approve -input=false \
+            -target=random_id.acr \
+            -target=azurerm_resource_group.main \
+            -target=azurerm_container_registry.main \
+            -target=azurerm_container_app_environment.main
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Job 3 — build (main only, after apply-base)
+# ACR is guaranteed to exist now. Gets the login server from tofu output
+# instead of az acr list so there is no dependency on the Azure CLI.
+# ──────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    needs: [apply-base]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: Tofu init
+        working-directory: infra/azure-tofu
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET:   ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          tofu init -input=false \
+            -backend-config="storage_account_name=${{ secrets.AZURE_STATE_STORAGE_ACCOUNT }}"
 
       - name: Get ACR login server
         id: acr
+        working-directory: infra/azure-tofu
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET:   ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
         run: |
-          SERVER=$(az acr list --resource-group bigtwo-rg --query "[0].loginServer" -o tsv)
+          SERVER=$(tofu output -raw acr_login_server)
           echo "server=$SERVER" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
@@ -125,13 +189,14 @@ jobs:
           cache-to:   type=registry,ref=${{ steps.acr.outputs.server }}/${{ env.FRONTEND_IMG }}:cache,mode=max
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Job 3 — apply (main branch only, after plan AND build pass)
-# Applies the saved plan — infra is updated and containers redeployed.
+# Job 4 — apply-apps (main only, after build)
+# Images now exist in ACR. Applies the full config to create/update the
+# container apps with the correct image tag.
 # ──────────────────────────────────────────────────────────────────────────────
-  apply:
-    name: OpenTofu apply
+  apply-apps:
+    name: OpenTofu apply (container apps)
     runs-on: ubuntu-latest
-    needs: [plan, build]
+    needs: [build]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     steps:
@@ -154,12 +219,6 @@ jobs:
           tofu init -input=false \
             -backend-config="storage_account_name=${{ secrets.AZURE_STATE_STORAGE_ACCOUNT }}"
 
-      - name: Download plan artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: azure-tfplan
-          path: infra/azure-tofu
-
       - name: Tofu apply
         working-directory: infra/azure-tofu
         env:
@@ -170,7 +229,7 @@ jobs:
           TF_VAR_azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           TF_VAR_azure_location:        ${{ secrets.AZURE_LOCATION }}
           TF_VAR_image_tag:             ${{ github.sha }}
-        run: tofu apply -input=false tfplan
+        run: tofu apply -auto-approve -input=false
 
       - name: Print app URL
         working-directory: infra/azure-tofu
