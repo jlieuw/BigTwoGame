@@ -1,0 +1,22 @@
+/* ── CSS custom properties ────────────────────────────────────────────────── */
+:root {
+  --felt: #2d7a3a;
+  --felt-dark: #1f5a29;
+  --card-bg: #fff;
+  --card-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  --card-selected: #ffe066;
+  --card-red: #d12020;
+  --card-black: #1a1a1a;
+  --btn: #e8a020;
+  --btn-hover: #f0b030;
+}
+
+/* ── Reset ────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+#app { height: 100%; }

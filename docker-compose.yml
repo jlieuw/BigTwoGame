@@ -1,0 +1,35 @@
+services:
+
+  backend:
+    build:
+      context: ./backend/BigTwo.Api
+      dockerfile: Dockerfile
+    container_name: bigtwo-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:5000
+    networks:
+      - bigtwo
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: bigtwo-frontend
+    ports:
+      - "3000:80"
+    environment:
+      # Full URL (scheme + host) injected into nginx.conf.template at startup.
+      # Local Docker Compose uses plain HTTP to the backend service name.
+      # Scaleway uses the full HTTPS URL of the backend Serverless Container.
+      - BACKEND_URL=http://backend:5000
+    depends_on:
+      - backend
+    networks:
+      - bigtwo
+
+networks:
+  bigtwo:
+    driver: bridge

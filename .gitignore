@@ -1,0 +1,14 @@
+# .NET
+backend/*/bin/
+backend/*/obj/
+backend/**/*.user
+
+# Node / Vue
+frontend/node_modules/
+frontend/dist/
+frontend/dist2/
+frontend/.env
+
+# General
+.DS_Store
+*.log
