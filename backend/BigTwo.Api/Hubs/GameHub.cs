@@ -52,10 +52,11 @@ public class GameHub : Hub
 
         await Clients.Caller.SendAsync("RoomCreated", new
         {
-            roomCode = room.Code,
-            playerId = player.Id,
-            isHost   = true,
-            players  = room.Players.Select(PlayerDto)
+            roomCode     = room.Code,
+            playerId     = player.Id,
+            sessionToken = player.SessionToken,
+            isHost       = true,
+            players      = room.Players.Select(PlayerDto)
         });
     }
 
@@ -78,10 +79,11 @@ public class GameHub : Hub
         // Tell the joiner their own info
         await Clients.Caller.SendAsync("RoomJoined", new
         {
-            roomCode = room.Code,
-            playerId = player!.Id,
-            isHost   = false,
-            players  = room.Players.Select(PlayerDto)
+            roomCode     = room.Code,
+            playerId     = player!.Id,
+            sessionToken = player.SessionToken,
+            isHost       = false,
+            players      = room.Players.Select(PlayerDto)
         });
 
         // Notify everyone in the room (including the joiner) about the updated player list
@@ -175,8 +177,51 @@ public class GameHub : Hub
         });
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // DTOs & helpers
+    // ──────────────────────────────────────────────────────────────────────────    // Reconnect (after a page refresh)
+    // ────────────────────────────────────────────────────────────────────
+
+    public async Task Reconnect(string roomCode, string sessionToken)
+    {
+        roomCode = roomCode.Trim().ToUpperInvariant();
+
+        var (room, player, error) = _rooms.Reconnect(roomCode, sessionToken, Context.ConnectionId);
+        if (error is not null) { await Error(error); return; }
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, room!.Code);
+
+        // Tell the caller their identity & current room state. Includes the full game
+        // state (hand, table, current turn) so the client can resume mid-game.
+        var state = room.GameState;
+        await Clients.Caller.SendAsync("Reconnected", new
+        {
+            roomCode        = room.Code,
+            playerId        = player!.Id,
+            isHost          = room.HostId == player.Id,
+            status          = room.Status.ToString(),
+            lobbyPlayers    = room.Players.Select(PlayerDto),
+            // Game-in-progress fields are null when the game hasn't started yet
+            hand            = state is null ? null : player.Hand.Select(CardDto),
+            tableCards      = state is null ? null : state.LastPlayedCards.Select(CardDto),
+            currentPlayerId = state is null ? null : room.Players[state.CurrentPlayerIndex].Id,
+            lastPlayerId    = state?.LastPlayerId,
+            players         = state is null ? null : room.Players.Select(PlayerInfoDto),
+            isOver          = state?.IsOver ?? false,
+            winnerId        = state?.WinnerId,
+            winnerNickname  = state?.WinnerId is null
+                                ? null
+                                : room.Players.FirstOrDefault(p => p.Id == state.WinnerId)?.Nickname
+        });
+
+        // Let other players know this player is back online
+        await Clients.OthersInGroup(room.Code).SendAsync("PlayerReconnected", new
+        {
+            playerId = player.Id,
+            nickname = player.Nickname,
+            players  = room.Players.Select(PlayerDto)
+        });
+    }
+
+    // ────────────────────────────────────────────────────────────────────    // DTOs & helpers
     // ──────────────────────────────────────────────────────────────────────────
 
     private Task Error(string message) =>

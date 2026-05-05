@@ -27,10 +27,11 @@ public class RoomService
     {
         lock (_lock)
         {
-            var code     = GenerateRoomCode();
-            var playerId = Guid.NewGuid().ToString("N");
-            var player   = new Player(playerId, connectionId, nickname);
-            var room     = new Room(code, playerId);
+            var code         = GenerateRoomCode();
+            var playerId     = Guid.NewGuid().ToString("N");
+            var sessionToken = Guid.NewGuid().ToString("N");
+            var player       = new Player(playerId, connectionId, nickname, sessionToken);
+            var room         = new Room(code, playerId);
             room.Players.Add(player);
             room.LastActivity         = DateTime.UtcNow;
             _rooms[code]              = room;
@@ -53,8 +54,9 @@ public class RoomService
             if (room.Players.Any(p => p.Nickname.Equals(nickname, StringComparison.OrdinalIgnoreCase)))
                 return (null, null, "That nickname is already taken in this room.");
 
-            var playerId = Guid.NewGuid().ToString("N");
-            var player   = new Player(playerId, connectionId, nickname);
+            var playerId     = Guid.NewGuid().ToString("N");
+            var sessionToken = Guid.NewGuid().ToString("N");
+            var player       = new Player(playerId, connectionId, nickname, sessionToken);
             room.Players.Add(player);
             room.LastActivity         = DateTime.UtcNow;
             _connToRoom[connectionId] = roomCode;
@@ -71,6 +73,33 @@ public class RoomService
     public Room? GetRoom(string roomCode)
     {
         lock (_lock) { return _rooms.GetValueOrDefault(roomCode); }
+    }
+
+    /// <summary>
+    /// Reconnects a player after a page refresh. Looks up the player by session token,
+    /// updates their connection ID, and marks them as connected. Returns the room and player
+    /// (or an error message if the session is invalid / room is gone).
+    /// </summary>
+    public (Room? room, Player? player, string? error) Reconnect(
+        string roomCode, string sessionToken, string newConnectionId)
+    {
+        lock (_lock)
+        {
+            if (!_rooms.TryGetValue(roomCode, out var room))
+                return (null, null, "Room no longer exists.");
+
+            var player = room.Players.FirstOrDefault(p => p.SessionToken == sessionToken);
+            if (player is null)
+                return (null, null, "Session not found in this room.");
+
+            // Drop the old conn-id mapping (if any) and install the new one
+            _connToRoom.Remove(player.ConnectionId);
+            player.ConnectionId         = newConnectionId;
+            player.IsConnected          = true;
+            _connToRoom[newConnectionId] = roomCode;
+            room.LastActivity            = DateTime.UtcNow;
+            return (room, player, null);
+        }
     }
 
     public void Disconnect(string connectionId)

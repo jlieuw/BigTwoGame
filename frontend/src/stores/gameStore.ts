@@ -2,8 +2,32 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as signalR from '@microsoft/signalr'
 import type { Card, LobbyPlayer, PlayerInfo, GameStatus, RoundPlay } from '../types/game'
+import { sounds } from '../composables/useSound'
 
 const HUB_URL = import.meta.env.VITE_HUB_URL ?? '/gamehub'
+const STORAGE_KEY = 'bigtwo:session'
+
+interface StoredSession {
+  roomCode: string
+  sessionToken: string
+}
+
+function loadSession(): StoredSession | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) as StoredSession : null
+  } catch {
+    return null
+  }
+}
+
+function saveSession(s: StoredSession) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)) } catch { /* ignore */ }
+}
+
+function clearSession() {
+  try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
+}
 
 export const useGameStore = defineStore('game', () => {
   // Connection
@@ -13,6 +37,7 @@ export const useGameStore = defineStore('game', () => {
   const status          = ref<GameStatus>('idle')
   const roomCode        = ref<string | null>(null)
   const myId            = ref<string | null>(null)
+  const sessionToken    = ref<string | null>(null)
   const isHost          = ref(false)
   const lobbyPlayers    = ref<LobbyPlayer[]>([])
   const players         = ref<PlayerInfo[]>([])
@@ -57,20 +82,56 @@ export const useGameStore = defineStore('game', () => {
     connection.on('RoomCreated', (data) => {
       roomCode.value     = data.roomCode
       myId.value         = data.playerId
+      sessionToken.value = data.sessionToken
       isHost.value       = data.isHost
       lobbyPlayers.value = data.players
       status.value       = 'lobby'
+      saveSession({ roomCode: data.roomCode, sessionToken: data.sessionToken })
     })
 
     connection.on('RoomJoined', (data) => {
       roomCode.value     = data.roomCode
       myId.value         = data.playerId
+      sessionToken.value = data.sessionToken
       isHost.value       = data.isHost
       lobbyPlayers.value = data.players
       status.value       = 'lobby'
+      saveSession({ roomCode: data.roomCode, sessionToken: data.sessionToken })
+    })
+
+    connection.on('Reconnected', (data) => {
+      roomCode.value     = data.roomCode
+      myId.value         = data.playerId
+      isHost.value       = data.isHost
+      lobbyPlayers.value = data.lobbyPlayers ?? []
+
+      if (data.status === 'Playing' || data.status === 'Finished') {
+        myHand.value          = data.hand ?? []
+        tableCards.value      = data.tableCards ?? []
+        currentPlayerId.value = data.currentPlayerId ?? null
+        lastPlayerId.value    = data.lastPlayerId ?? null
+        players.value         = data.players ?? []
+        selectedCardIds.value = new Set()
+        roundHistory.value    = []   // server doesn't track per-round history
+        if (data.isOver) {
+          winnerId.value       = data.winnerId
+          winnerNickname.value = data.winnerNickname
+          status.value         = 'finished'
+        } else {
+          status.value = 'playing'
+        }
+      } else {
+        status.value = 'lobby'
+      }
+    })
+
+    connection.on('PlayerReconnected', (data) => {
+      lobbyPlayers.value = data.players
     })
 
     connection.on('LobbyUpdated', (data) => {
+      // Sound only when someone *new* joins (not on disconnect updates)
+      if (data.players.length > lobbyPlayers.value.length) sounds.playerJoined()
       lobbyPlayers.value = data.players
     })
 
@@ -82,6 +143,8 @@ export const useGameStore = defineStore('game', () => {
       roundHistory.value    = []
       status.value          = 'playing'
       selectedCardIds.value = new Set()
+      sounds.gameStart()
+      if (data.currentPlayerId === myId.value) sounds.yourTurn()
     })
 
     connection.on('CardsPlayed', (data) => {
@@ -96,6 +159,8 @@ export const useGameStore = defineStore('game', () => {
       lastPlayerId.value    = data.playerId
       players.value         = data.players
       selectedCardIds.value = new Set()
+      sounds.cardPlayed()
+      if (data.currentPlayerId && data.currentPlayerId === myId.value) sounds.yourTurn()
     })
 
     connection.on('HandUpdated', (data) => {
@@ -110,6 +175,8 @@ export const useGameStore = defineStore('game', () => {
         lastPlayerId.value = null
         roundHistory.value = []   // new round — clear history
       }
+      sounds.pass()
+      if (data.currentPlayerId === myId.value) sounds.yourTurn()
     })
 
     connection.on('PlayerDisconnected', (data) => {
@@ -120,11 +187,15 @@ export const useGameStore = defineStore('game', () => {
       winnerId.value       = data.winnerId
       winnerNickname.value = data.winnerNickname
       status.value         = 'finished'
+      if (data.winnerId === myId.value) sounds.win()
+      else sounds.lose()
+      clearSession()   // game over — no point reconnecting
     })
 
     connection.on('Error', (msg: string) => {
       errorMessage.value = msg
       setTimeout(() => { errorMessage.value = null }, 3500)
+      sounds.error()
     })
   }
 
@@ -137,6 +208,21 @@ export const useGameStore = defineStore('game', () => {
   async function joinRoom(code: string, nickname: string) {
     await ensureConnected()
     await connection!.invoke('JoinRoom', code, nickname)
+  }
+
+  /**
+   * Attempts to reconnect using a stored session. Returns true if a session
+   * existed and the reconnect call was made (the actual outcome arrives via
+   * the `Reconnected` or `Error` event).
+   */
+  async function tryReconnect(): Promise<boolean> {
+    const stored = loadSession()
+    if (!stored) return false
+
+    await ensureConnected()
+    sessionToken.value = stored.sessionToken
+    await connection!.invoke('Reconnect', stored.roomCode, stored.sessionToken)
+    return true
   }
 
   async function startGame() {
@@ -168,6 +254,7 @@ export const useGameStore = defineStore('game', () => {
     status.value          = 'idle'
     roomCode.value        = null
     myId.value            = null
+    sessionToken.value    = null
     isHost.value          = false
     lobbyPlayers.value    = []
     players.value         = []
@@ -180,11 +267,12 @@ export const useGameStore = defineStore('game', () => {
     winnerNickname.value  = null
     errorMessage.value    = null
     roundHistory.value    = []
+    clearSession()
   }
 
   return {
     // state
-    status, roomCode, myId, isHost,
+    status, roomCode, myId, sessionToken, isHost,
     lobbyPlayers, players, myHand, tableCards,
     currentPlayerId, lastPlayerId, selectedCardIds,
     winnerId, winnerNickname, errorMessage, connecting,
@@ -192,7 +280,8 @@ export const useGameStore = defineStore('game', () => {
     // computed
     isMyTurn, me, selectedCards,
     // actions
-    createRoom, joinRoom, startGame, playCards, pass,
+    createRoom, joinRoom, tryReconnect,
+    startGame, playCards, pass,
     toggleCard, clearError, reset
   }
 })
