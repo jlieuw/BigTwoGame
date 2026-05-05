@@ -12,6 +12,7 @@ export interface PlayerInfo {
   id: string
   nickname: string
   cardCount: number
+  isConnected: boolean
 }
 
 export interface LobbyPlayer {

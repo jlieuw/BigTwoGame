@@ -8,7 +8,7 @@ import type { PlayerInfo } from '../types/game'
 const router = useRouter()
 const store  = useGameStore()
 
-if (store.status === 'idle') router.replace('/')
+if (store.status === 'idle' && !store.reconnecting) router.replace('/')
 
 const opponents = computed<PlayerInfo[]>(() =>
   store.players.filter(p => p.id !== store.myId)
@@ -55,9 +55,12 @@ function playAgain() {
         v-for="(p, i) in opponents"
         :key="p.id"
         class="opponent"
-        :class="[opponentPosition(i, opponents.length), { active: isCurrentPlayer(p.id) }]"
+        :class="[opponentPosition(i, opponents.length), { active: isCurrentPlayer(p.id), disconnected: !p.isConnected }]"
       >
-        <div class="opponent-name">{{ opponentLabel(p) }}</div>
+        <div class="opponent-name">
+          {{ opponentLabel(p) }}
+          <span v-if="!p.isConnected" class="disc-badge" title="Disconnected">⚠</span>
+        </div>
         <div class="opponent-cards">
           <div
             v-for="n in p.cardCount"
@@ -235,6 +238,15 @@ function playAgain() {
   border-color: #ffe066;
   background: rgba(255, 224, 102, 0.08);
   box-shadow: 0 0 16px rgba(255, 224, 102, 0.2);
+}
+.opponent.disconnected {
+  opacity: 0.45;
+  filter: grayscale(0.8);
+}
+.disc-badge {
+  margin-left: 4px;
+  color: #ffb84d;
+  font-size: 12px;
 }
 .opponent-name {
   color: #fff;

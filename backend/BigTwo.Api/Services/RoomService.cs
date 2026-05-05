@@ -112,18 +112,10 @@ public class RoomService
                 var p = room.Players.FirstOrDefault(x => x.ConnectionId == connectionId);
                 if (p is not null) p.IsConnected = false;
 
-                // Remove the room if every player has disconnected
-                if (room.Players.All(x => !x.IsConnected))
-                {
-                    _rooms.Remove(code);
-                    // Clean up any remaining connection mappings for this room
-                    foreach (var player in room.Players)
-                    {
-                        // connectionId is already being removed below, skip it
-                        if (player.ConnectionId != connectionId)
-                            _connToRoom.Remove(player.ConnectionId);
-                    }
-                }
+                // Rooms are NOT removed immediately when all players disconnect:
+                // a refresh briefly leaves the room with zero connected players,
+                // and we want the player to be able to reconnect. Stale rooms are
+                // pruned by RoomCleanupService after the inactivity threshold.
             }
             _connToRoom.Remove(connectionId);
         }

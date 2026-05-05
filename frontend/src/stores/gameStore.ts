@@ -50,6 +50,7 @@ export const useGameStore = defineStore('game', () => {
   const winnerNickname  = ref<string | null>(null)
   const errorMessage    = ref<string | null>(null)
   const connecting      = ref(false)
+  const reconnecting    = ref(false)
   /** History of plays in the current round. Cleared when a new round starts. */
   const roundHistory    = ref<RoundPlay[]>([])
 
@@ -100,6 +101,7 @@ export const useGameStore = defineStore('game', () => {
     })
 
     connection.on('Reconnected', (data) => {
+      reconnecting.value = false
       roomCode.value     = data.roomCode
       myId.value         = data.playerId
       isHost.value       = data.isHost
@@ -126,7 +128,8 @@ export const useGameStore = defineStore('game', () => {
     })
 
     connection.on('PlayerReconnected', (data) => {
-      lobbyPlayers.value = data.players
+      if (data.lobbyPlayers) lobbyPlayers.value = data.lobbyPlayers
+      if (data.players)      players.value      = data.players
     })
 
     connection.on('LobbyUpdated', (data) => {
@@ -180,7 +183,8 @@ export const useGameStore = defineStore('game', () => {
     })
 
     connection.on('PlayerDisconnected', (data) => {
-      lobbyPlayers.value = data.players
+      if (data.lobbyPlayers) lobbyPlayers.value = data.lobbyPlayers
+      if (data.players)      players.value      = data.players
     })
 
     connection.on('GameOver', (data) => {
@@ -193,6 +197,12 @@ export const useGameStore = defineStore('game', () => {
     })
 
     connection.on('Error', (msg: string) => {
+      // If a reconnect attempt failed, the session is dead — clear it so the user lands on home
+      if (reconnecting.value) {
+        reconnecting.value = false
+        clearSession()
+        sessionToken.value = null
+      }
       errorMessage.value = msg
       setTimeout(() => { errorMessage.value = null }, 3500)
       sounds.error()
@@ -219,10 +229,18 @@ export const useGameStore = defineStore('game', () => {
     const stored = loadSession()
     if (!stored) return false
 
-    await ensureConnected()
-    sessionToken.value = stored.sessionToken
-    await connection!.invoke('Reconnect', stored.roomCode, stored.sessionToken)
-    return true
+    reconnecting.value = true
+    try {
+      await ensureConnected()
+      sessionToken.value = stored.sessionToken
+      await connection!.invoke('Reconnect', stored.roomCode, stored.sessionToken)
+      return true
+    } catch {
+      reconnecting.value = false
+      clearSession()
+      sessionToken.value = null
+      return false
+    }
   }
 
   async function startGame() {
@@ -275,7 +293,7 @@ export const useGameStore = defineStore('game', () => {
     status, roomCode, myId, sessionToken, isHost,
     lobbyPlayers, players, myHand, tableCards,
     currentPlayerId, lastPlayerId, selectedCardIds,
-    winnerId, winnerNickname, errorMessage, connecting,
+    winnerId, winnerNickname, errorMessage, connecting, reconnecting,
     roundHistory,
     // computed
     isMyTurn, me, selectedCards,

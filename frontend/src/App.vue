@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from './stores/gameStore'
 import { sounds } from './composables/useSound'
@@ -10,6 +10,14 @@ const muted  = ref(false)
 
 const MUTE_KEY = 'bigtwo:muted'
 
+// Route to the correct view as soon as a Reconnected event updates the store status
+let didInitialReconnect = false
+watch(() => store.status, (s) => {
+  if (!didInitialReconnect) return
+  if (s === 'lobby') router.replace('/lobby')
+  else if (s === 'playing' || s === 'finished') router.replace('/game')
+})
+
 onMounted(async () => {
   // Restore mute preference
   try {
@@ -19,15 +27,7 @@ onMounted(async () => {
 
   // Try to silently reconnect to a previous session
   try {
-    const reconnecting = await store.tryReconnect()
-    if (reconnecting) {
-      // Wait one tick for the Reconnected event to update store.status,
-      // then route to the appropriate view
-      setTimeout(() => {
-        if (store.status === 'lobby') router.replace('/lobby')
-        else if (store.status === 'playing' || store.status === 'finished') router.replace('/game')
-      }, 250)
-    }
+    didInitialReconnect = await store.tryReconnect()
   } catch {
     // Reconnect failed (server unreachable, room gone, etc.) — stay on home
   }

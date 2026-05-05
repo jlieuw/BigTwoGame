@@ -6,8 +6,8 @@ import { useGameStore } from '../stores/gameStore'
 const router = useRouter()
 const store  = useGameStore()
 
-// Redirect if not in a room
-if (store.status === 'idle') router.replace('/')
+// Redirect if not in a room (but wait for any in-flight reconnect)
+if (store.status === 'idle' && !store.reconnecting) router.replace('/')
 
 // When game starts, go to game view
 watch(() => store.status, (s) => {

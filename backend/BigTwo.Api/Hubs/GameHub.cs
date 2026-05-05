@@ -23,9 +23,10 @@ public class GameHub : Hub
         {
             await Clients.Group(room.Code).SendAsync("PlayerDisconnected", new
             {
-                playerId = player.Id,
-                nickname = player.Nickname,
-                players  = room.Players.Select(PlayerDto)
+                playerId     = player.Id,
+                nickname     = player.Nickname,
+                lobbyPlayers = room.Players.Select(PlayerDto),
+                players      = room.Players.Select(PlayerInfoDto)
             });
         }
 
@@ -215,9 +216,10 @@ public class GameHub : Hub
         // Let other players know this player is back online
         await Clients.OthersInGroup(room.Code).SendAsync("PlayerReconnected", new
         {
-            playerId = player.Id,
-            nickname = player.Nickname,
-            players  = room.Players.Select(PlayerDto)
+            playerId     = player.Id,
+            nickname     = player.Nickname,
+            lobbyPlayers = room.Players.Select(PlayerDto),
+            players      = room.Players.Select(PlayerInfoDto)
         });
     }
 
@@ -247,8 +249,9 @@ public class GameHub : Hub
 
     private static object PlayerInfoDto(Player p) => new
     {
-        id        = p.Id,
-        nickname  = p.Nickname,
-        cardCount = p.Hand.Count
+        id          = p.Id,
+        nickname    = p.Nickname,
+        cardCount   = p.Hand.Count,
+        isConnected = p.IsConnected
     };
 }

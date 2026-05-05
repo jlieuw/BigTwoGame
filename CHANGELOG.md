@@ -9,7 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Session-based reconnect** — players can refresh the page and rejoin their room with full state restored (hand, turn, table)
 - **Sound effects** for card play, pass, your turn, game start/over, and player join (synthesized via Web Audio API; no audio assets required)
+- Mute toggle button (bottom-right) with preference persisted to localStorage
+- Disconnected opponents are visually greyed out with a ⚠ badge in the game view
 - `CHANGELOG.md`
+
+### Fixed
+- Refreshing as the only connected player no longer destroys the room before reconnect can complete — immediate cleanup on disconnect was removed; rooms are now only pruned by the background cleanup service after 30 minutes of inactivity
+- `LobbyView` and `GameView` no longer redirect to home during an in-flight reconnect (race condition where `status === 'idle'` briefly held during page load)
+- In-game player list now carries `isConnected`, so disconnects are visible during gameplay (not just in the lobby)
 
 ## [1.1.0] — 2026-05-05
 
