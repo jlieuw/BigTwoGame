@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars and fill in values.
+# Never commit terraform.tfvars — it contains secrets.
+# In CI, values are set via TF_VAR_* environment variables.
+
+azure_subscription_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+azure_location        = "westeurope"
+image_tag             = "latest"

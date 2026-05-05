@@ -12,3 +12,15 @@ frontend/.env
 # General
 .DS_Store
 *.log
+
+# OpenTofu
+infra/tofu/.terraform/
+infra/tofu/*.tfstate
+infra/tofu/*.tfstate.backup
+infra/tofu/terraform.tfvars
+infra/tofu/.terraform.lock.hcl
+infra/azure-tofu/.terraform/
+infra/azure-tofu/*.tfstate
+infra/azure-tofu/*.tfstate.backup
+infra/azure-tofu/terraform.tfvars
+infra/azure-tofu/.terraform.lock.hcl
