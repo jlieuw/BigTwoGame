@@ -7,7 +7,7 @@ A real-time multiplayer **Big Two** (大老二) web app.
 | Backend  | ASP.NET Core 10 · SignalR                |
 | Frontend | Vue 3 · TypeScript · Vite · Pinia        |
 | Transport| WebSockets (SignalR)                     |
-| Deploy   | Docker Compose                           |
+| Deploy   | Docker Compose · Azure Container Apps     |
 
 ---
 
@@ -29,7 +29,7 @@ The backend API runs on **http://localhost:5000**.
 
 ### Option B — Without Docker (dev mode)
 
-**Backend** (requires .NET 8 SDK):
+**Backend** (requires .NET 10 SDK):
 ```bash
 cd "Big Two/backend/BigTwo.Api"
 dotnet run
@@ -75,7 +75,7 @@ Straight → Flush → Full House → Four-of-a-Kind + kicker → Straight Flush
 ```
 Big Two/
 ├── backend/
-│   └── BigTwo.Api/          # ASP.NET Core 8 project
+│   └── BigTwo.Api/          # ASP.NET Core 10 project
 │       ├── Hubs/GameHub.cs  # SignalR hub (all client↔server messages)
 │       ├── Models/          # Card, Room, GameState, Player …
 │       ├── Services/
@@ -94,48 +94,47 @@ Big Two/
 
 ---
 
-## Deploying to Scaleway
+## Deploying to Azure
 
-The app runs on **Scaleway Serverless Containers** (one for the backend, one for the frontend).  
-The frontend nginx proxies `/gamehub` → backend over HTTPS, so no CORS configuration is needed and the browser only ever talks to one host.
+The app runs on **Azure Container Apps** (one for the backend, one for the frontend) with images stored in **Azure Container Registry**.  
+Infrastructure is managed with **OpenTofu** (`infra/azure-tofu/`). The frontend nginx proxies `/gamehub` → backend over HTTPS, so no CORS configuration is needed.
 
 ### First deployment (run once)
 
-Prerequisites: `scw` CLI, `docker`, `jq` installed; `scw init` completed with your API keys.
+Prerequisites: Azure CLI installed and logged in.
 
-```bash
-chmod +x infra/scaleway-setup.sh
-./infra/scaleway-setup.sh
+```powershell
+.\infra\azure-bootstrap.ps1
 ```
 
-The script will:
-1. Create a **Container Registry** namespace and push both images
-2. Create a **Serverless Containers** namespace with backend (min 1 replica) and frontend (scales to zero)
-3. Wire `BACKEND_URL` into the frontend container so nginx knows where to proxy SignalR traffic
-4. Print the **7 GitHub secrets** you need to add to your repository
+The script creates a resource group (`bigtwo-state-rg`) with a Storage Account for OpenTofu remote state, and prints the GitHub secrets you need.
 
 ### Subsequent deployments (automatic)
 
-Add the 7 secrets printed by the setup script to your repo under  
-**Settings → Secrets and variables → Actions**, then push to `main`:
+Add the secrets to your repo under **Settings → Secrets and variables → Actions**, then push to `main`:
 
 ```bash
 git push origin main
 ```
 
-The workflow in `.github/workflows/scaleway-deploy.yml` builds both images with layer caching, pushes them to the registry, and rolls them out. The live URL is printed in the workflow summary.
+The workflow in `.github/workflows/azure-deploy.yml` runs:
+1. **Plan** — shows the infrastructure diff
+2. **Apply base** — creates/updates the resource group, ACR, and Container Apps environment
+3. **Build** — builds and pushes Docker images to ACR
+4. **Apply apps** — creates/updates the container apps with the new image tag
+
+The live URL is printed in the workflow summary.
 
 ### Secrets reference
 
 | Secret | Description |
 |---|---|
-| `SCW_ACCESS_KEY` | IAM access key |
-| `SCW_SECRET_KEY` | IAM secret key |
-| `SCW_DEFAULT_REGION` | e.g. `fr-par` |
-| `SCW_DEFAULT_PROJECT_ID` | Your Scaleway project ID |
-| `SCW_REGISTRY_NAMESPACE` | Registry namespace name (e.g. `bigtwo`) |
-| `SCW_BACKEND_CONTAINER_ID` | Serverless Container ID for the backend |
-| `SCW_FRONTEND_CONTAINER_ID` | Serverless Container ID for the frontend |
+| `AZURE_CLIENT_ID` | Service principal client ID |
+| `AZURE_CLIENT_SECRET` | Service principal client secret |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+| `AZURE_TENANT_ID` | Azure AD tenant ID |
+| `AZURE_LOCATION` | Azure region (e.g. `westeurope`) |
+| `AZURE_STATE_STORAGE_ACCOUNT` | Storage account name for OpenTofu state |
 
-> **Note:** The backend runs at `min-scale=1` (always on) because game state is held in memory.  
+> **Note:** The backend runs with `min_replicas=1` (always on) because game state is held in memory.  
 > To support multiple backend replicas you would add an Azure SignalR Service or Redis backplane.
