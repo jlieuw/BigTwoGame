@@ -6,6 +6,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<GameLogicService>();
 builder.Services.AddSingleton<RoomService>();
+builder.Services.AddHostedService<RoomCleanupService>();
 
 // Origins can be overridden at deploy time via the AllowedOrigins config key.
 // In production the nginx proxy makes CORS moot (requests arrive from an internal IP),

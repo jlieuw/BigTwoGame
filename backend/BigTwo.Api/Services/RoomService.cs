@@ -32,6 +32,7 @@ public class RoomService
             var player   = new Player(playerId, connectionId, nickname);
             var room     = new Room(code, playerId);
             room.Players.Add(player);
+            room.LastActivity         = DateTime.UtcNow;
             _rooms[code]              = room;
             _connToRoom[connectionId] = code;
             return room;
@@ -55,6 +56,7 @@ public class RoomService
             var playerId = Guid.NewGuid().ToString("N");
             var player   = new Player(playerId, connectionId, nickname);
             room.Players.Add(player);
+            room.LastActivity         = DateTime.UtcNow;
             _connToRoom[connectionId] = roomCode;
             return (room, player, null);
         }
@@ -80,6 +82,19 @@ public class RoomService
             {
                 var p = room.Players.FirstOrDefault(x => x.ConnectionId == connectionId);
                 if (p is not null) p.IsConnected = false;
+
+                // Remove the room if every player has disconnected
+                if (room.Players.All(x => !x.IsConnected))
+                {
+                    _rooms.Remove(code);
+                    // Clean up any remaining connection mappings for this room
+                    foreach (var player in room.Players)
+                    {
+                        // connectionId is already being removed below, skip it
+                        if (player.ConnectionId != connectionId)
+                            _connToRoom.Remove(player.ConnectionId);
+                    }
+                }
             }
             _connToRoom.Remove(connectionId);
         }
@@ -100,6 +115,7 @@ public class RoomService
             if (!room.CanStart)                  return "Need at least 2 players to start.";
 
             room.Status = RoomStatus.Playing;
+            room.LastActivity = DateTime.UtcNow;
             _logic.DealCards(room.Players);
 
             room.GameState = new GameState
@@ -151,6 +167,7 @@ public class RoomService
             state.LastComboType   = combo.Type;
             state.PassCount       = 0;
             state.IsFirstTurn     = false;
+            room.LastActivity     = DateTime.UtcNow;
 
             if (player.Hand.Count == 0)
             {
@@ -182,6 +199,7 @@ public class RoomService
             if (current.Id != player.Id) return new("It is not your turn.", false);
 
             state.PassCount++;
+            room.LastActivity = DateTime.UtcNow;
             int activePlayers = room.Players.Count(p => p.IsConnected);
 
             // Everyone else passed → the last player who played leads the new round
@@ -208,6 +226,33 @@ public class RoomService
     // ──────────────────────────────────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Removes rooms that have been inactive for longer than <paramref name="maxAge"/>.
+    /// Called periodically by the background cleanup service.
+    /// </summary>
+    public int RemoveStaleRooms(TimeSpan maxAge)
+    {
+        lock (_lock)
+        {
+            var cutoff = DateTime.UtcNow - maxAge;
+            var stale  = _rooms.Where(kv => kv.Value.LastActivity < cutoff)
+                                .Select(kv => kv.Key)
+                                .ToList();
+
+            foreach (var code in stale)
+            {
+                if (_rooms.TryGetValue(code, out var room))
+                {
+                    foreach (var p in room.Players)
+                        _connToRoom.Remove(p.ConnectionId);
+                    _rooms.Remove(code);
+                }
+            }
+
+            return stale.Count;
+        }
+    }
 
     /// <summary>
     /// Lock-free lookup — MUST only be called while the caller already holds <see cref="_lock"/>.
