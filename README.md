@@ -70,6 +70,112 @@ Straight → Flush → Full House → Four-of-a-Kind + kicker → Straight Flush
 
 ---
 
+## Solution design
+
+### Architecture
+
+```
+┌────────────────────┐         WebSocket / HTTP          ┌────────────────────────┐
+│                    │  ◄──────── /gamehub ─────────────► │                        │
+│   Vue 3 SPA        │          (SignalR)                │   ASP.NET Core 10      │
+│   Pinia store      │                                   │   SignalR Hub          │
+│   Vue Router       │  nginx reverse-proxies /gamehub   │   In-memory state      │
+│                    │  to the backend container         │                        │
+└────────────────────┘                                   └────────────────────────┘
+      Frontend                                                  Backend
+  (Azure Container App)                                   (Azure Container App)
+```
+
+### State management
+
+- **Backend**: All game state is held **in-memory** in `RoomService` (a thread-safe singleton). Two dictionaries map room codes → `Room` objects and connection IDs → room codes. A `System.Threading.Lock` protects all mutations.
+- **Frontend**: A single **Pinia store** (`gameStore`) holds the reactive state. SignalR event handlers update the store; Vue components react automatically.
+- **No database** — when the backend restarts, all rooms are lost. This is acceptable for a casual game.
+
+### SignalR message flow
+
+#### Client → Server (hub methods)
+
+| Method | Parameters | Description |
+|---|---|---|
+| `CreateRoom` | `nickname` | Create a new room; caller becomes host |
+| `JoinRoom` | `roomCode, nickname` | Join an existing room |
+| `StartGame` | — | Host starts the game (deals cards, picks first player) |
+| `PlayCards` | `cardIds[]` | Play a combo from your hand |
+| `Pass` | — | Skip your turn (not allowed when leading) |
+
+#### Server → Client (events)
+
+| Event | Sent to | Payload |
+|---|---|---|
+| `RoomCreated` | Caller | `{ roomCode, playerId, isHost, players[] }` |
+| `RoomJoined` | Caller | `{ roomCode, playerId, isHost, players[] }` |
+| `LobbyUpdated` | Room group | `{ players[] }` |
+| `GameStarted` | Each player individually | `{ hand[], currentPlayerId, players[] }` |
+| `CardsPlayed` | Room group | `{ playerId, cards[], currentPlayerId, players[] }` |
+| `HandUpdated` | Caller only | `{ hand[] }` |
+| `PlayerPassed` | Room group | `{ playerId, currentPlayerId, newRound, tableCards[] }` |
+| `PlayerDisconnected` | Room group | `{ playerId, nickname, players[] }` |
+| `GameOver` | Room group | `{ winnerId, winnerNickname }` |
+| `Error` | Caller | `string` message |
+
+Each player receives their own hand privately via `GameStarted` and `HandUpdated`. Other players only see card counts.
+
+### Game flow
+
+```
+ HomeView              LobbyView                GameView
+┌──────────┐         ┌────────────┐         ┌─────────────────┐
+│ nickname  │         │ room code  │         │ opponents (top) │
+│ create /  │──lobby──│ player list│──play───│ table (center)  │
+│ join room │         │ start btn  │         │ my hand (bottom)│
+└──────────┘         └────────────┘         │ play/pass btns  │
+     │                     │                │ round history   │
+     │ createRoom()        │ startGame()    │ game over overlay│
+     │ joinRoom()          │               └─────────────────┘
+     ▼                     ▼                        │
+  RoomCreated/          GameStarted              GameOver
+  RoomJoined          (deals cards,           (winner shown,
+  → navigate           finds 3♦ holder)        "Play Again"
+    to /lobby           → navigate              → reset, go /)
+                          to /game
+```
+
+1. **Create/Join** — A player enters a nickname and creates or joins a room. The server generates a 6-char room code and adds players to a SignalR group.
+2. **Lobby** — Up to 4 players wait. The host sees a "Start Game" button (enabled at ≥ 2 players).
+3. **Deal** — The server shuffles a 52-card deck, deals evenly round-robin, and picks the player holding 3♦ to go first.
+4. **Play loop** — On each turn the current player either plays a valid combo that beats the table, or passes. When all other players pass consecutively, the last player who played starts a new round (free lead).
+5. **Win** — The first player to empty their hand wins. The server emits `GameOver` and all clients show the result overlay.
+
+### Combo validation
+
+Cards are ranked `3 (lowest)` through `2 (highest)`, with suits breaking ties: ♦ < ♣ < ♥ < ♠. Valid combos:
+
+| Combo | Count | Rule |
+|---|---|---|
+| Single | 1 | Any card |
+| Pair | 2 | Same rank |
+| Triple | 3 | Same rank |
+| Straight | 5 | Consecutive ranks (any suits) |
+| Flush | 5 | Same suit (not consecutive) |
+| Full House | 5 | Three of a kind + pair (ranked by triple) |
+| Four of a Kind | 5 | Four of a kind + any kicker (ranked by quad) |
+| Straight Flush | 5 | Same suit + consecutive ranks |
+
+A play must match the card count of the previous play. For 5-card combos, a higher combo type always beats a lower one (e.g., Full House beats Flush). Within the same type, the higher combo value wins.
+
+### Navigation & routing
+
+| Path | View | Guard |
+|---|---|---|
+| `/` | `HomeView` | — |
+| `/lobby` | `LobbyView` | Redirects to `/` if status is `idle` |
+| `/game` | `GameView` | Redirects to `/` if status is `idle` |
+
+Transitions are driven by store status changes: `idle` → `lobby` → `playing` → `finished`.
+
+---
+
 ## Project layout
 
 ```
