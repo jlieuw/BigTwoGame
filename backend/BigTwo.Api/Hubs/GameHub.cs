@@ -16,17 +16,17 @@ public class GameHub : Hub
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        var (room, player) = _rooms.Lookup(Context.ConnectionId);
-        _rooms.Disconnect(Context.ConnectionId);
+        var (room, player, newCurrentPlayerId) = _rooms.Disconnect(Context.ConnectionId);
 
         if (room is not null && player is not null)
         {
             await Clients.Group(room.Code).SendAsync("PlayerDisconnected", new
             {
-                playerId     = player.Id,
-                nickname     = player.Nickname,
-                lobbyPlayers = room.Players.Select(PlayerDto),
-                players      = room.Players.Select(PlayerInfoDto)
+                playerId        = player.Id,
+                nickname        = player.Nickname,
+                lobbyPlayers    = room.Players.Select(PlayerDto),
+                players         = room.Players.Select(PlayerInfoDto),
+                currentPlayerId = newCurrentPlayerId
             });
         }
 

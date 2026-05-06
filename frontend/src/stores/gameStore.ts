@@ -183,8 +183,9 @@ export const useGameStore = defineStore('game', () => {
     })
 
     connection.on('PlayerDisconnected', (data) => {
-      if (data.lobbyPlayers) lobbyPlayers.value = data.lobbyPlayers
-      if (data.players)      players.value      = data.players
+      if (data.lobbyPlayers)    lobbyPlayers.value    = data.lobbyPlayers
+      if (data.players)         players.value         = data.players
+      if (data.currentPlayerId) currentPlayerId.value = data.currentPlayerId
     })
 
     connection.on('GameOver', (data) => {
@@ -194,6 +195,15 @@ export const useGameStore = defineStore('game', () => {
       if (data.winnerId === myId.value) sounds.win()
       else sounds.lose()
       clearSession()   // game over — no point reconnecting
+    })
+
+    connection.onreconnected(async () => {
+      if (roomCode.value && sessionToken.value) {
+        reconnecting.value = true
+        try {
+          await connection!.invoke('Reconnect', roomCode.value, sessionToken.value)
+        } catch { /* Error handler will update reconnecting flag */ }
+      }
     })
 
     connection.on('Error', (msg: string) => {
@@ -269,6 +279,10 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function reset() {
+    if (connection) {
+      connection.stop().catch(() => {})
+      connection = null
+    }
     status.value          = 'idle'
     roomCode.value        = null
     myId.value            = null

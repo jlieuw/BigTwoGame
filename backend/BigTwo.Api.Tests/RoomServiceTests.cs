@@ -464,7 +464,50 @@ public class RoomServiceTests
     public void Disconnect_UnknownConnection_DoesNotThrow()
     {
         var sut = NewSut();
-        sut.Disconnect("no-such-conn"); // should be a no-op
+        var (room, player, newId) = sut.Disconnect("no-such-conn");
+        Assert.Null(room);
+        Assert.Null(player);
+        Assert.Null(newId);
+    }
+
+    [Fact]
+    public void Disconnect_CurrentPlayer_AdvancesTurn()
+    {
+        var (sut, room) = StartedGame(2);
+        var state       = room.GameState!;
+        var currentConn = room.Players[state.CurrentPlayerIndex].ConnectionId;
+
+        var (_, _, newCurrentPlayerId) = sut.Disconnect(currentConn);
+
+        Assert.NotNull(newCurrentPlayerId);
+        // Turn should have moved to the other player
+        var nextPlayer = room.Players[state.CurrentPlayerIndex];
+        Assert.Equal(nextPlayer.Id, newCurrentPlayerId);
+    }
+
+    [Fact]
+    public void Disconnect_NonCurrentPlayer_DoesNotAdvanceTurn()
+    {
+        var (sut, room) = StartedGame(2);
+        var state       = room.GameState!;
+        var originalIdx = state.CurrentPlayerIndex;
+        var otherConn   = room.Players[(originalIdx + 1) % 2].ConnectionId;
+
+        var (_, _, newCurrentPlayerId) = sut.Disconnect(otherConn);
+
+        Assert.Null(newCurrentPlayerId);
+        Assert.Equal(originalIdx, state.CurrentPlayerIndex);
+    }
+
+    [Fact]
+    public void Disconnect_BeforeGameStarts_ReturnsNullCurrentPlayerId()
+    {
+        var sut  = NewSut();
+        var room = sut.CreateRoom("conn1", "Alice");
+
+        var (_, _, newCurrentPlayerId) = sut.Disconnect("conn1");
+
+        Assert.Null(newCurrentPlayerId);
     }
 
     [Fact]

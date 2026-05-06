@@ -102,22 +102,36 @@ public class RoomService
         }
     }
 
-    public void Disconnect(string connectionId)
+    public (Room? room, Player? player, string? newCurrentPlayerId) Disconnect(string connectionId)
     {
         lock (_lock)
         {
-            if (!_connToRoom.TryGetValue(connectionId, out var code)) return;
-            if (_rooms.TryGetValue(code, out var room))
-            {
-                var p = room.Players.FirstOrDefault(x => x.ConnectionId == connectionId);
-                if (p is not null) p.IsConnected = false;
-
-                // Rooms are NOT removed immediately when all players disconnect:
-                // a refresh briefly leaves the room with zero connected players,
-                // and we want the player to be able to reconnect. Stale rooms are
-                // pruned by RoomCleanupService after the inactivity threshold.
-            }
+            if (!_connToRoom.TryGetValue(connectionId, out var code)) return (null, null, null);
             _connToRoom.Remove(connectionId);
+
+            if (!_rooms.TryGetValue(code, out var room)) return (null, null, null);
+
+            var player = room.Players.FirstOrDefault(x => x.ConnectionId == connectionId);
+            if (player is not null) player.IsConnected = false;
+
+            // If the disconnecting player was the current player, advance the turn so
+            // the game isn't stuck waiting for someone who is gone.
+            string? newCurrentPlayerId = null;
+            var state = room.GameState;
+            if (state is not null && !state.IsOver && player is not null &&
+                room.Players[state.CurrentPlayerIndex].Id == player.Id)
+            {
+                AdvanceTurn(room, state);
+                var newCurrent = room.Players[state.CurrentPlayerIndex];
+                if (newCurrent.Id != player.Id)
+                    newCurrentPlayerId = newCurrent.Id;
+            }
+
+            // Rooms are NOT removed immediately when all players disconnect:
+            // a refresh briefly leaves the room with zero connected players,
+            // and we want the player to be able to reconnect. Stale rooms are
+            // pruned by RoomCleanupService after the inactivity threshold.
+            return (room, player, newCurrentPlayerId);
         }
     }
 

@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/gameStore'
 
 const router = useRouter()
 const store  = useGameStore()
+
+onMounted(() => {
+  // If the player navigated here from an active game/lobby, tear down that session
+  // so they can start fresh. Guard against 'idle' to avoid clearing a valid session
+  // that the App.vue reconnect flow hasn't resolved yet (fresh page load at '/').
+  if (store.status !== 'idle') {
+    store.reset()
+  }
+})
 
 const nickname  = ref('')
 const roomInput = ref('')
