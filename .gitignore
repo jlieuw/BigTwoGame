@@ -24,3 +24,5 @@ infra/azure-tofu/*.tfstate
 infra/azure-tofu/*.tfstate.backup
 infra/azure-tofu/terraform.tfvars
 infra/azure-tofu/.terraform.lock.hcl
+
+.claude
